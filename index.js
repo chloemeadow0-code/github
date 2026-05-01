@@ -331,6 +331,24 @@ function createServer() {
 // ═══════════════════════════════════════
 
 const app = express();
+
+// 1. 全局请求日志：让 Zeabur 记录所有到达的请求，解决“日志没东西”的问题
+app.use((req, res, next) => {
+  console.log(`[请求到达] ${req.method} ${req.url}`);
+  next();
+});
+
+// 2. 跨域 (CORS) 配置：手动放行外部平台的请求并处理 OPTIONS 预检（无需安装新依赖）
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json());
 
 // ─── Streamable HTTP (推荐，/mcp) ───
