@@ -332,13 +332,13 @@ function createServer() {
 
 const app = express();
 
-// 1. 全局请求日志：让 Zeabur 记录所有到达的请求，解决“日志没东西”的问题
+// 1. 全局请求日志
 app.use((req, res, next) => {
   console.log(`[请求到达] ${req.method} ${req.url}`);
   next();
 });
 
-// 2. 跨域 (CORS) 配置：手动放行外部平台的请求并处理 OPTIONS 预检（无需安装新依赖）
+// 2. 跨域 (CORS) 配置
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -349,11 +349,13 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+// 【关键修复 1】：取消全局的 express.json()，避免吸干数据流导致 MCP SDK 卡死。
+// 只在需要它的 /mcp 路由单独声明
+const jsonParser = express.json();
 
 // ─── Streamable HTTP (推荐，/mcp) ───
 
-app.post('/mcp', async (req, res) => {
+app.post('/mcp', jsonParser, async (req, res) => {
   try {
     const server = createServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -387,7 +389,11 @@ const sseSessions = new Map();
 app.get('/sse', async (req, res) => {
   try {
     const server = createServer();
-    const transport = new SSEServerTransport('/messages', res);
+    // 【关键修复 2】：使用云端真实的 HTTPS 绝对路径，防止 Rikkahub 相对路径解析失败
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const messageEndpoint = `${protocol}://${req.get('host')}/messages`;
+    
+    const transport = new SSEServerTransport(messageEndpoint, res);
     sseSessions.set(transport.sessionId, { transport, server });
 
     res.on('close', () => {
@@ -402,13 +408,19 @@ app.get('/sse', async (req, res) => {
   }
 });
 
+// 【关键修复 3】：不要给这里注入 jsonParser，且包裹 try-catch 获取真实报错
 app.post('/messages', async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const session = sseSessions.get(sessionId);
-  if (session) {
-    await session.transport.handlePostMessage(req, res);
-  } else {
-    res.status(400).json({ error: 'Unknown session' });
+  try {
+    const sessionId = req.query.sessionId;
+    const session = sseSessions.get(sessionId);
+    if (session) {
+      await session.transport.handlePostMessage(req, res);
+    } else {
+      res.status(400).json({ error: 'Unknown session' });
+    }
+  } catch (err) {
+    console.error('[Messages] 处理 POST 请求失败:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
